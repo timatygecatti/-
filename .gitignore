@@ -1,4 +1,11 @@
 .env
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
 .vkbottle/
+events.json
+.venv/
+venv/

@@ -1,29 +1,32 @@
 import asyncio
+import os
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
-from vkbottle.bot import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text
+from vkbottle.bot import Bot, Message
 
 from helpers import (
+    MSK,
     add_event,
     ask_ai,
     format_events,
-    get_next_3_days_events,
-    get_month_events,
-    get_tomorrow_events,
     get_future_events,
-    MSK,
+    get_month_events,
+    get_next_3_days_events,
+    get_tomorrow_events,
+    load_all_events,
 )
 
 load_dotenv()
 
-bot = Bot(token=__import__("os").getenv("VK_TOKEN"))
+bot = Bot(token=os.getenv("VK_TOKEN"))
 
-user_states = {}
+user_states: dict[int, str | dict] = {}
 
 
-def main_keyboard() -> Keyboard:
+def build_main_keyboard() -> Keyboard:
+    """Создает основную клавиатуру бота."""
     keyboard = Keyboard(one_time=False)
     keyboard.add(Text("3Д"), color=KeyboardButtonColor.PRIMARY)
     keyboard.add(Text("1М"), color=KeyboardButtonColor.PRIMARY)
@@ -45,138 +48,169 @@ WELCOME_TEXT = (
 
 
 @bot.on.message(text=["начать", "старт", "/start", "привет"])
-async def start_handler(message: Message):
-    print(f"USER ID: {message.from_id}")
-    await message.answer(WELCOME_TEXT, keyboard=main_keyboard())
+async def start_handler(message: Message) -> None:
+    await message.answer(WELCOME_TEXT, keyboard=build_main_keyboard())
 
 
 @bot.on.message(text="3Д")
-async def handler_3d(message: Message):
+async def handler_3_days(message: Message) -> None:
     events = get_next_3_days_events(message.from_id)
     text = format_events(events, "Расписание на 3 дня:")
-    await message.answer(text, keyboard=main_keyboard())
+    await message.answer(text, keyboard=build_main_keyboard())
 
 
 @bot.on.message(text="1М")
-async def handler_1m(message: Message):
+async def handler_1_month(message: Message) -> None:
     events = get_month_events(message.from_id)
     text = format_events(events, "Расписание на месяц:")
-    await message.answer(text, keyboard=main_keyboard())
+    await message.answer(text, keyboard=build_main_keyboard())
 
 
 @bot.on.message(text="Р/З")
-async def handler_tomorrow(message: Message):
+async def handler_tomorrow(message: Message) -> None:
     events = get_tomorrow_events(message.from_id)
     text = format_events(events, "Расписание на завтра:")
-    await message.answer(text, keyboard=main_keyboard())
+    await message.answer(text, keyboard=build_main_keyboard())
 
 
 @bot.on.message(text="Добавить")
-async def handler_add_start(message: Message):
+async def handler_add_start(message: Message) -> None:
     user_states[message.from_id] = "awaiting_title"
     await message.answer(
         "Введите название события:",
-        keyboard=main_keyboard(),
+        keyboard=build_main_keyboard(),
     )
 
 
 @bot.on.message(text="Мои события")
-async def handler_my_events(message: Message):
+async def handler_my_events(message: Message) -> None:
     events = get_future_events(message.from_id)
     text = format_events(events, "Все будущие события:")
-    await message.answer(text, keyboard=main_keyboard())
+    await message.answer(text, keyboard=build_main_keyboard())
 
 
 @bot.on.message(func=lambda m: m.from_id in user_states)
-async def state_handler(message: Message):
+async def state_handler(message: Message) -> None:
     state = user_states.get(message.from_id)
+    kb = build_main_keyboard()
 
     if state == "awaiting_title":
         user_states[message.from_id] = {"title": message.text}
-        await message.answer("Введите дату (ДД.ММ.ГГГГ):", keyboard=main_keyboard())
+        await message.answer("Введите дату (ДД.ММ.ГГГГ):", keyboard=kb)
 
     elif isinstance(state, dict) and "title" in state and "date" not in state:
         try:
             datetime.strptime(message.text, "%d.%m.%Y")
-            user_states[message.from_id]["date"] = message.text
-            await message.answer("Введите время (ЧЧ:ММ):", keyboard=main_keyboard())
         except ValueError:
-            await message.answer("Неверный формат. Введите дату ДД.ММ.ГГГГ:", keyboard=main_keyboard())
+            await message.answer(
+                "Неверный формат. Введите дату ДД.ММ.ГГГГ:", keyboard=kb
+            )
+            return
+        user_states[message.from_id]["date"] = message.text
+        await message.answer("Введите время (ЧЧ:ММ):", keyboard=kb)
 
-    elif isinstance(state, dict) and "title" in state and "date" in state and "time" not in state:
+    elif (
+        isinstance(state, dict)
+        and "title" in state
+        and "date" in state
+        and "time" not in state
+    ):
         try:
             datetime.strptime(message.text, "%H:%M")
-            user_states[message.from_id]["time"] = message.text
-            s = user_states[message.from_id]
-            iso_date = datetime.strptime(s["date"], "%d.%m.%Y").strftime("%Y-%m-%d")
-            add_event(message.from_id, s["title"], iso_date, s["time"])
-            await message.answer(
-                f"Событие добавлено:\n  {s['title']}\n  {s['date']} {s['time']}\nНапоминание за 3 часа.",
-                keyboard=main_keyboard(),
-            )
-            del user_states[message.from_id]
         except ValueError:
-            await message.answer("Неверный формат. Введите время ЧЧ:ММ:", keyboard=main_keyboard())
+            await message.answer(
+                "Неверный формат. Введите время ЧЧ:ММ:", keyboard=kb
+            )
+            return
+
+        user_states[message.from_id]["time"] = message.text
+        state = user_states[message.from_id]
+        iso_date = datetime.strptime(state["date"], "%d.%m.%Y").strftime("%Y-%m-%d")
+        add_event(message.from_id, state["title"], iso_date, state["time"])
+        await message.answer(
+            f"Событие добавлено:\n"
+            f"  {state['title']}\n"
+            f"  {state['date']} {state['time']}\n"
+            f"Напоминание за 3 часа.",
+            keyboard=kb,
+        )
+        del user_states[message.from_id]
 
 
 @bot.on.message(func=lambda m: "|" in m.text)
-async def handler_add_event_fast(message: Message):
+async def handler_add_event_fast(message: Message) -> None:
+    parts = [part.strip() for part in message.text.split("|")]
+    if len(parts) != 3:
+        await message.answer("Формат: Название | ДД.ММ.ГГГГ | ЧЧ:ММ")
+        return
+
+    title, date_str, time_str = parts
     try:
-        parts = [p.strip() for p in message.text.split("|")]
-        if len(parts) != 3:
-            await message.answer("Формат: Название | ДД.ММ.ГГГГ | ЧЧ:ММ")
-            return
-        title = parts[0]
-        datetime.strptime(parts[1], "%d.%m.%Y")
-        datetime.strptime(parts[2], "%H:%M")
-        iso_date = datetime.strptime(parts[1], "%d.%m.%Y").strftime("%Y-%m-%d")
-        add_event(message.from_id, title, iso_date, parts[2])
-        await message.answer(
-            f"Событие добавлено:\n  {title}\n  {parts[1]} {parts[2]}",
-            keyboard=main_keyboard(),
-        )
+        datetime.strptime(date_str, "%d.%m.%Y")
+        datetime.strptime(time_str, "%H:%M")
     except ValueError:
-        await message.answer("Ошибка формата: Название | ДД.ММ.ГГГГ | ЧЧ:ММ", keyboard=main_keyboard())
+        await message.answer(
+            "Ошибка формата: Название | ДД.ММ.ГГГГ | ЧЧ:ММ",
+            keyboard=build_main_keyboard(),
+        )
+        return
+
+    iso_date = datetime.strptime(date_str, "%d.%m.%Y").strftime("%Y-%m-%d")
+    add_event(message.from_id, title, iso_date, time_str)
+    await message.answer(
+        f"Событие добавлено:\n  {title}\n  {date_str} {time_str}",
+        keyboard=build_main_keyboard(),
+    )
 
 
-@bot.on.message(func=lambda m: any(w in m.text.lower() for w in ["завтра", "расписан", "план", "событи", "дела на"]))
-async def schedule_from_text(message: Message):
+SCHEDULE_KEYWORDS = ["завтра", "расписан", "план", "событи", "дела на"]
+
+
+@bot.on.message(func=lambda m: any(w in m.text.lower() for w in SCHEDULE_KEYWORDS))
+async def schedule_from_text(message: Message) -> None:
     text = message.text.lower()
+    uid = message.from_id
+
     if "завтра" in text:
-        events = get_tomorrow_events(message.from_id)
-        answer = format_events(events, "Расписание на завтра:")
+        events = get_tomorrow_events(uid)
+        title = "Расписание на завтра:"
     elif "3" in text and ("дн" in text or "три" in text or "3д" in text):
-        events = get_next_3_days_events(message.from_id)
-        answer = format_events(events, "Расписание на 3 дня:")
+        events = get_next_3_days_events(uid)
+        title = "Расписание на 3 дня:"
     elif "месяц" in text:
-        events = get_month_events(message.from_id)
-        answer = format_events(events, "Расписание на месяц:")
+        events = get_month_events(uid)
+        title = "Расписание на месяц:"
     else:
-        events = get_future_events(message.from_id)
-        answer = format_events(events, "Будущие события:")
-    await message.answer(answer, keyboard=main_keyboard())
+        events = get_future_events(uid)
+        title = "Будущие события:"
+
+    await message.answer(format_events(events, title), keyboard=build_main_keyboard())
 
 
 @bot.on.message()
-async def ai_handler(message: Message):
+async def ai_handler(message: Message) -> None:
     response = await ask_ai(message.text)
-    await message.answer(response, keyboard=main_keyboard())
+    await message.answer(response, keyboard=build_main_keyboard())
 
 
-async def check_reminders():
-    sent = set()
+async def check_reminders() -> None:
+    """Проверяет и отправляет напоминания о событиях."""
+    sent: set[str] = set()
     while True:
         try:
             now = datetime.now(MSK)
-            data = __import__("helpers").load_all_events()
+            data = load_all_events()
             for uid, events in data.items():
                 for event in events:
                     event_dt = datetime.strptime(
                         f"{event['date']} {event['time']}", "%Y-%m-%d %H:%M"
                     ).replace(tzinfo=MSK)
-                    reminder_time = event_dt - timedelta(hours=event.get("reminder_hours", 3))
+                    reminder_time = event_dt - timedelta(
+                        hours=event.get("reminder_hours", 3)
+                    )
                     diff = (now - reminder_time).total_seconds()
                     key = f"{uid}_{event['date']}_{event['time']}_{event['title']}"
+
                     if -35 <= diff <= 35 and key not in sent:
                         await bot.api.messages.send(
                             peer_id=int(uid),
@@ -193,7 +227,7 @@ async def check_reminders():
         await asyncio.sleep(15)
 
 
-async def main():
+async def main() -> None:
     asyncio.create_task(check_reminders())
     await bot.run_polling()
 

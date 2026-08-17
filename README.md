@@ -1,0 +1,1 @@
+This is my first try to do bot in vk 
